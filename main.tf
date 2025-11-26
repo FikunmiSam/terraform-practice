@@ -232,7 +232,7 @@ resource "aws_instance" "ccem_host" {
 }
 
 resource "null_resource" "upload_standalone" {
-  depends_on = [aws_instance.sftp]
+  depends_on = [aws_instance.ccem_host]
 
   provisioner "file" {
     source      = "${path.module}/standalone.zip"

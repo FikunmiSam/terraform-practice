@@ -142,86 +142,86 @@ resource "aws_instance" "ccem_host" {
     assocciate_public_ip_address = true
     key_name = aws_key_pair.ccem_key.key_name
     
-        user_data = base64encode(<<-EOT
-            #!/bin/bash
-            yum update -y
-            amazon-linux-extras install docker -y
-            yum install -y amazon-efs-utils openssh-server unzip
+        user_data = base64encode(<<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install -y amazon-efs-utils openssh-server unzip
 
-            systemctl start docker
-            systemctl enable docker
-            usermod -aG docker ec2-user
+              # Wait for EFS to be available
+              sleep 30
 
-            EFS_ID=${aws_efs_file_system.ccem-efs.id}
-            HOST_MOUNT_POINT="/opt"
+              # Mount EFS to /mnt/efs
+              mkdir -p /mnt/efs
+              echo "$${aws_efs_file_system.ccem-efs.id}:/ /mnt/efs efs _netdev,tls 0 0" >> /etc/fstab
+              mount -a
 
-            SFTP_JAILED_DIR="$${HOST_MOUNT_POINT}/standalone/ccem"
-            FINAL_UPLOAD_DIR="$${SFTP_JAILED_DIR}/CEM"
-            SFTP_USER="sftpuser"
+              # Wait for file to be copied
+              while [ ! -f /tmp/standalone.zip ]; do
+                sleep 5
+              done
 
-            # Mount EFS to /opt
-            mkdir -p $${HOST_MOUNT_POINT}
-            echo "$${EFS_ID}:/ $${HOST_MOUNT_POINT} efs defaults,_netdev,tls 0 0" >> /etc/fstab
-            mount -a
+              # Copy and extract standalone.zip to EFS
+              cp /tmp/standalone.zip /mnt/efs/standalone.zip
+              unzip /mnt/efs/standalone.zip -d /mnt/efs/
 
-            # Move file from temp to /opt with sudo
-            sudo mv /tmp/standalone.zip /opt/standalone.zip
-            unzip /opt/standalone.zip -d /opt/
+              # Define number of users
+              NUM_USERS=10
+              
+              # Array of CYCLE_FOLDERS subdirectories
+              FOLDERS=("MEDA" "MEDB" "MEDC" "MEDD" "MEDE" "MEDF" "MEDG" "MEDH" "MEDI" "MEDJ")
 
-            # Create SFTP user
-            useradd -r -s /sbin/nologin $${SFTP_USER}
+              # Create SFTP users dynamically
+              for i in $(seq 1 $NUM_USERS); do
+                  USER_ID=$((1000 + i))
+                  USERNAME="user$i"
+                  FOLDER_INDEX=$((i - 1))
+                  TARGET_FOLDER="${FOLDERS[$FOLDER_INDEX]}"
+                  CYCLE_PATH="/mnt/efs/standalone/ccem/CEM/CYCLE_FOLDERS/$TARGET_FOLDER"
+                  
+                  # Create user with specific UID:GID
+                  groupadd -g $USER_ID $USERNAME
+                  useradd -u $USER_ID -g $USER_ID -d /mnt/efs/$USERNAME -s /sbin/nologin $USERNAME
+                  
+                  # Create chroot directory structure (must be root-owned)
+                  mkdir -p /mnt/efs/$USERNAME
+                  chown root:root /mnt/efs/$USERNAME
+                  chmod 755 /mnt/efs/$USERNAME
+                  
+                  # Create mount point for the CYCLE_FOLDER inside user's chroot
+                  mkdir -p /mnt/efs/$USERNAME/data
+                  
+                  # Bind mount the specific CYCLE_FOLDER to user's data directory
+                  echo "$CYCLE_PATH /mnt/efs/$USERNAME/data none bind 0 0" >> /etc/fstab
+                  
+                  # Set permissions on the CYCLE_FOLDER so user can read/write
+                  chown -R $USER_ID:$USER_ID $CYCLE_PATH
+                  chmod -R 755 $CYCLE_PATH
+                  
+                  # Setup SSH directory and keys
+                  mkdir -p /mnt/efs/$USERNAME/.ssh
+                  cp /home/ec2-user/.ssh/authorized_keys /mnt/efs/$USERNAME/.ssh/authorized_keys
+                  chown -R $USER_ID:$USER_ID /mnt/efs/$USERNAME/.ssh
+                  chmod 700 /mnt/efs/$USERNAME/.ssh
+                  chmod 600 /mnt/efs/$USERNAME/.ssh/authorized_keys
+              done
 
-            chown root:root $${SFTP_JAILED_DIR}
-            chmod 755 $${FINAL_UPLOAD_DIR}
+              # Mount all bind mounts
+              mount -a
 
-            sed -i 's/^Subsystem sftp.*/Subsystem sftp \/usr\/libexec\/openssh\/sftp-server/' /etc/ssh/sshd_config
+              # Configure SFTP with chroot for all users
+              cat >> /etc/ssh/sshd_config <<'EOL'
 
-            # Configure SFTP with SSH key auth
-            cat >> /etc/ssh/sshd_config <<'EOL'
+              Match User user*
+                  ChrootDirectory /mnt/efs/%u
+                  ForceCommand internal-sftp
+                  AllowTcpForwarding no
+                  X11Forwarding no
+                  PasswordAuthentication no
+              EOL
 
-            Subsystem sftp internal-sftp
-
-            Match User sftpuser
-                ForceCommand internal-sftp
-                ChrootDirectory $${SFTP_JAILED_DIR}
-                AllowTcpForwarding no
-                X11Forwarding no
-                PasswordAuthentication no
-            EOL
-
-            systemctl restart sshd
-
-            docker run -d \
-                --name ccem-dummy \
-                -p 8080:8080 \
-                -v $${FINAL_UPLOAD_DIR}:/opt/ccem/standalone/ccem/CEM \
-                nginx:latest
-        EOT
+              systemctl restart sshd
+              EOF
         )
-
-        provisioner "file" {
-        source      = "standalone.zip"
-        destination = "/tmp/standalone.zip"
-        connection {
-            type        = "ssh"
-            user        = "ec2-user"
-            private_key = tls_private_key.ccem_ssh.private_key_pem
-            host        = self.public_ip
-            }
-        }
-
-        provisioner "remote-exec" {
-            inline = [
-                "sudo mv /tmp/standalone.zip /opt/standalone.zip",
-                "unzip /opt/standalone.zip -d /opt/"
-            ]
-            connection {
-                type        = "ssh"
-                user        = "ec2-user"
-                private_key = tls_private_key.ccem_ssh.private_key_pem
-                host        = self.public_ip
-            }
-        }
 
   tags = {
     Name = "SFTP-EFS-Server"
@@ -229,4 +229,20 @@ resource "aws_instance" "ccem_host" {
 
   depends_on = [aws_efs_mount_target.ccem-efs-mt,
   ]
+}
+
+resource "null_resource" "upload_standalone" {
+  depends_on = [aws_instance.sftp]
+
+  provisioner "file" {
+    source      = "${path.module}/standalone.zip"
+    destination = "/tmp/standalone.zip"
+
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      private_key = tls_private_key.ccem_ssh.private_key_pem
+      host        = aws_instance.ccem_host.public_ip
+    }
+  }
 }

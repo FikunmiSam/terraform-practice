@@ -165,7 +165,7 @@ resource "aws_instance" "ccem_host" {
               unzip /mnt/efs/standalone.zip -d /mnt/efs/
 
               # Define number of users
-              NUM_USERS=10
+              NUM_USERS=2
               
               # Array of CYCLE_FOLDERS subdirectories
               FOLDERS=("MEDA" "MEDB" "MEDC" "MEDD" "MEDE" "MEDF" "MEDG" "MEDH" "MEDI" "MEDJ")

@@ -175,7 +175,7 @@ resource "aws_instance" "ccem_host" {
                   USER_ID=$((1000 + i))
                   USERNAME="user$i"
                   FOLDER_INDEX=$((i - 1))
-                  TARGET_FOLDER="${FOLDERS[$FOLDER_INDEX]}"
+                  TARGET_FOLDER="$${FOLDERS[$FOLDER_INDEX]}"
                   CYCLE_PATH="/mnt/efs/standalone/ccem/CEM/CYCLE_FOLDERS/$TARGET_FOLDER"
                   
                   # Create user with specific UID:GID

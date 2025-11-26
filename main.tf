@@ -139,7 +139,7 @@ resource "aws_instance" "ccem_host" {
     instance_type = var.instance_type
     subnet_id     = aws_subnet.ccem_public_subnet.id
     vpc_security_group_ids = [aws_security_group.ccem-sg.id]
-    assocciate_public_ip_address = true
+    associate_public_ip_address = true
     key_name = aws_key_pair.ccem_key.key_name
     
         user_data = base64encode(<<-EOF
